@@ -111,7 +111,6 @@ class MyFedAvg(fl.server.strategy.Strategy):
         fit_metrics_aggregation_fn: Optional[MetricsAggregationFn] = None,
         evaluate_metrics_aggregation_fn: Optional[MetricsAggregationFn] = None,
         inplace: bool = True,
-        eliminated_client_id: Optional[int] = None,
     ) -> None:
         super().__init__()
 
@@ -134,7 +133,6 @@ class MyFedAvg(fl.server.strategy.Strategy):
         self.fit_metrics_aggregation_fn = fit_metrics_aggregation_fn
         self.evaluate_metrics_aggregation_fn = evaluate_metrics_aggregation_fn
         self.inplace = inplace
-        self.eliminated_client_id = eliminated_client_id
 
     def __repr__(self) -> str:
         """Compute a string representation of the strategy."""
@@ -182,7 +180,8 @@ class MyFedAvg(fl.server.strategy.Strategy):
             # Custom fit config function provided
             config = self.on_fit_config_fn(server_round)
         fit_ins = FitIns(parameters, config)
-        print("client_manager", client_manager.all())
+        # print("client_manager", client_manager.all())
+        print(f'Server round {server_round} has started')
         # Sample clients
         sample_size, min_num_clients = self.num_fit_clients(
             client_manager.num_available()
@@ -233,24 +232,24 @@ class MyFedAvg(fl.server.strategy.Strategy):
         if not self.accept_failures and failures:
             return None, {}
 
-        if server_round > 2 and self.eliminated_client_id:
+        if server_round > 2:
             results = [
-                (client, result)
-                for client, result in results
-                if client.cid != self.eliminated_client_id
+                (client, fit_res)
+                for client, fit_res in results
+                if not fit_res.metrics.get("isEliminated", False)
             ]
 
-        print("results", len(results))
-        print(self.eliminated_client_id, "round:", server_round)
-        for client, _ in results:
-            print(client.cid)
+        print(f'{len(results)} clients in round {server_round}')
+
+        for client, fit_res in results:
+            print(f'Client cid: {client.cid}, Metrics: {fit_res.metrics}')
 
         # Convert results
         weights_results = [
             (parameters_to_ndarrays(fit_res.parameters), fit_res.num_examples)
             for _, fit_res in results
         ]
-        print("num", len(weights_results[0]))
+
         aggregated_ndarrays = aggregate(weights_results)
 
         parameters_aggregated = ndarrays_to_parameters(aggregated_ndarrays)
@@ -262,7 +261,7 @@ class MyFedAvg(fl.server.strategy.Strategy):
             metrics_aggregated = self.fit_metrics_aggregation_fn(fit_metrics)
         elif server_round == 1:  # Only log this warning once
             log(WARNING, "No fit_metrics_aggregation_fn provided")
-
+        print(f'Server round {server_round} has finished')
         return parameters_aggregated, metrics_aggregated
 
     def aggregate_evaluate(
@@ -303,7 +302,6 @@ strategy = MyFedAvg(
     min_fit_clients=3,  # Never sample less than 10 clients for training
     min_evaluate_clients=3,  # Never sample less than 5 clients for evaluation
     min_available_clients=3,  # Wait until all 10 clients are available
-    eliminated_client_id=2,  ## need to find right id
 )
 
 # # Create FedAvg strategy

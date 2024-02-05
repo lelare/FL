@@ -9,16 +9,9 @@ from functools import partial
 from alibi_detect.cd import MMDDrift
 from alibi_detect.cd.pytorch import preprocess_drift
 
-
-import random
-
-# import torchvision.datasets as datasets
-# import torchvision.transforms as transforms
-from torch.utils.data import DataLoader, random_split, Subset
-from torch.utils.data import TensorDataset, DataLoader
-
 from encmodel import *
 from utils import *
+
 import argparse
 
 # set random seed and device
@@ -26,16 +19,11 @@ seed = 0
 torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
 
-
-(x_train, y_train), (x_test, y_test) = tf.keras.datasets.cifar10.load_data()
-x_train = x_train.astype("float32") / 255
-x_test = x_test.astype("float32") / 255
-y_train = y_train.astype("int64").reshape(
-    -1,
-)
-y_test = y_test.astype("int64").reshape(
-    -1,
-)
+(x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
+x_train = x_train.reshape((x_train.shape[0], 28, 28, 1)).astype("float32") / 255.0
+x_test = x_test.reshape((x_test.shape[0], 28, 28, 1)).astype("float32") / 255.0
+y_train = tf.keras.utils.to_categorical(y_train)
+y_test = tf.keras.utils.to_categorical(y_test)
 
 x_train = x_train[0 : int(len(x_train) * 0.2)]
 y_train = y_train[0 : int(len(y_train) * 0.2)]  # just to get some small part of data
@@ -80,6 +68,18 @@ for x_data, _ in client_data:
     client_detectors.append(detector)
 
 
+
+parser = argparse.ArgumentParser(description="Flower")
+parser.add_argument('--cid', type=str, help='client ID')
+parser.add_argument("--mode", choices=['train', 'test'], help="client mode")
+parser.add_argument('--gpu_id', help='gpu ID')
+args = parser.parse_args()
+print('args.cid', args.cid)
+# import os
+# os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
+# client_drift_count = {str(i): 0 for i in range(n_clients)}
+client_drift_count = {args.cid: 0}
+
 # Drift detection on client data
 def handle_client_drift(c_data, detector, net):
     (x_train, y_train, x_val, y_val, cid) = c_data
@@ -96,34 +96,25 @@ def handle_client_drift(c_data, detector, net):
     if is_drift:
         print("Drift detected on client data. Retraining local model.")
         net = train(net, x_train, y_train, num_epochs=5)
+
+        client_drift_count[args.cid] += 1
+        print('updated client_drift_count', client_drift_count)
     else:
         print("No drift detected on client data. Continuing training.")
-    return net
 
+    isEliminated = False
+    if client_drift_count[args.cid] > 3:
+        print(f"Client {cid} has detected drift more than 3 times!")
+        isEliminated = True
 
-# Drift detection on aggregated data
-def handle_global_drift(aggregated_data, detector, global_model):
-    is_drift, metrics = detector.predict(permute_c(aggregated_data["x_train"]))
-    print(metrics)  # You may extract useful information, e.g., p-value, from metrics
-    if is_drift:
-        print("Drift detected on aggregated data. Updating global model.")
-        # Update the global model based on aggregated_data
-        # global_model = train(
-        #     global_model,
-        #     aggregated_data["x_train"],
-        #     aggregated_data["y_train"],
-        #     num_epochs=5,
-        # )
-    else:
-        print("No drift detected on aggregated data. Continuing training.")
-    # return global_model
+    return net, isEliminated
 
 
 class FlowerClient(fl.client.NumPyClient):
-    def __init__(self, client_data, model, cid):
+    def __init__(self, client_data, model, isEliminated):
         self.client_data = client_data
         self.model = model
-        self.cid = cid
+        self.isEliminated = isEliminated
 
     def get_parameters(self, config):
         # Return the current model parameters
@@ -141,7 +132,8 @@ class FlowerClient(fl.client.NumPyClient):
         # Train the local model and return the new parameters, num_examples, and done flag
         new_params = [param.detach().cpu().numpy() for param in self.model.parameters()]
         num_examples = len(self.client_data["x_train"])
-        return new_params, num_examples, {}
+        print('self.isEliminated', self.isEliminated)
+        return new_params, num_examples, {"isEliminated": self.isEliminated}
 
     def evaluate(self, parameters, config):
         # Perform the evaluation of the model after updating it with the given
@@ -166,8 +158,10 @@ class FlowerClient(fl.client.NumPyClient):
 
 
 def client_fn(cid: str) -> FlowerClient:
+    # print("int(cid)", int(cid))
+    cid = args.cid
+    # print('args.cid', args.cid)
     x_data, y_data = client_data[int(cid)]
-    print("int(cid)", int(cid))
     # x_data = np.array(x_data)
     x_data = permute_c(x_data)
     # y_data = np.array(y_data)
@@ -184,8 +178,10 @@ def client_fn(cid: str) -> FlowerClient:
     model = Encoder(encoding_dim).to(device)
 
     # Apply drift detection on client data
-    # model = handle_client_drift(all_data, client_detectors[int(cid)], model)
-    handle_client_drift(all_data, client_detectors[int(cid)], model)
+    model, isEliminated = handle_client_drift(all_data, client_detectors[int(cid)], model)
+
+    print('isEliminated', isEliminated)
+    # handle_client_drift(all_data, client_detectors[int(cid)], model)
 
     return FlowerClient(
         client_data={
@@ -195,7 +191,7 @@ def client_fn(cid: str) -> FlowerClient:
             "y_val": y_val,
         },
         model=model,
-        cid=cid,
+        isEliminated=isEliminated,
     ).to_client()
 
 
