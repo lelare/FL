@@ -181,7 +181,6 @@ class MyFedAvg(fl.server.strategy.Strategy):
             config = self.on_fit_config_fn(server_round)
         fit_ins = FitIns(parameters, config)
         # print("client_manager", client_manager.all())
-        print(f'Server round {server_round} has started')
         # Sample clients
         sample_size, min_num_clients = self.num_fit_clients(
             client_manager.num_available()
@@ -216,6 +215,8 @@ class MyFedAvg(fl.server.strategy.Strategy):
             num_clients=sample_size, min_num_clients=min_num_clients
         )
 
+        print(f"Server round {server_round} evaluating on {len(clients)} clients:")
+
         # Return client/config pairs
         return [(client, evaluate_ins) for client in clients]
 
@@ -231,18 +232,6 @@ class MyFedAvg(fl.server.strategy.Strategy):
         # Do not aggregate if there are failures and failures are not accepted
         if not self.accept_failures and failures:
             return None, {}
-
-        if server_round > 2:
-            results = [
-                (client, fit_res)
-                for client, fit_res in results
-                if not fit_res.metrics.get("isEliminated", False)
-            ]
-
-        print(f'{len(results)} clients in round {server_round}')
-
-        for client, fit_res in results:
-            print(f'Client cid: {client.cid}, Metrics: {fit_res.metrics}')
 
         # Convert results
         weights_results = [
@@ -261,7 +250,6 @@ class MyFedAvg(fl.server.strategy.Strategy):
             metrics_aggregated = self.fit_metrics_aggregation_fn(fit_metrics)
         elif server_round == 1:  # Only log this warning once
             log(WARNING, "No fit_metrics_aggregation_fn provided")
-        print(f'Server round {server_round} has finished')
         return parameters_aggregated, metrics_aggregated
 
     def aggregate_evaluate(
@@ -276,6 +264,18 @@ class MyFedAvg(fl.server.strategy.Strategy):
         # Do not aggregate if there are failures and failures are not accepted
         if not self.accept_failures and failures:
             return None, {}
+        
+        if server_round > 2:
+            results = [
+                (client, evaluate_res)
+                for client, evaluate_res in results
+                if not evaluate_res.metrics.get("isEliminated", False)
+            ]
+
+        print(f'Aggregate {len(results)} clients in round {server_round} during evaluation')
+
+        for client, evaluate_res in results:
+            print(f'Client cid: {client.cid}, Metrics: {evaluate_res.metrics}')
 
         # Aggregate loss
         loss_aggregated = weighted_loss_avg(
@@ -292,28 +292,18 @@ class MyFedAvg(fl.server.strategy.Strategy):
             metrics_aggregated = self.evaluate_metrics_aggregation_fn(eval_metrics)
         elif server_round == 1:  # Only log this warning once
             log(WARNING, "No evaluate_metrics_aggregation_fn provided")
-
+        
+        print(f'Server round {server_round} has finished')
         return loss_aggregated, metrics_aggregated
 
 
 strategy = MyFedAvg(
     fraction_fit=1.0,  # Sample 100% of available clients for training
     fraction_evaluate=0.5,  # Sample 50% of available clients for evaluation
-    min_fit_clients=3,  # Never sample less than 10 clients for training
-    min_evaluate_clients=3,  # Never sample less than 5 clients for evaluation
-    min_available_clients=3,  # Wait until all 10 clients are available
+    min_fit_clients=3,  # Never sample less than 3 clients for training
+    min_evaluate_clients=3,  # Never sample less than 3 clients for evaluation
+    min_available_clients=3,  # Wait until all 3 clients are available
 )
-
-# # Create FedAvg strategy
-# strategy = fl.server.strategy.FedAvg(
-#     fraction_fit=1.0,  # Sample 100% of available clients for training
-#     fraction_evaluate=0.5,  # Sample 50% of available clients for evaluation
-#     min_fit_clients=3,  # Never sample less than 10 clients for training
-#     min_evaluate_clients=3,  # Never sample less than 5 clients for evaluation
-#     min_available_clients=3,  # Wait until all 10 clients are available
-#     # evaluate_metrics_aggregation_fn=handle_global_drift
-#     # Q?: should I call handle_global_drift here?
-# )
 
 
 fl.server.start_server(
@@ -321,5 +311,3 @@ fl.server.start_server(
     config=fl.server.ServerConfig(num_rounds=4),
     strategy=strategy,
 )
-
-# fl.server.start_server(config=fl.server.ServerConfig(num_rounds=3))

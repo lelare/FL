@@ -74,47 +74,46 @@ parser.add_argument('--cid', type=str, help='client ID')
 parser.add_argument("--mode", choices=['train', 'test'], help="client mode")
 parser.add_argument('--gpu_id', help='gpu ID')
 args = parser.parse_args()
-print('args.cid', args.cid)
+print('Client:', args.cid)
 # import os
 # os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
 # client_drift_count = {str(i): 0 for i in range(n_clients)}
 client_drift_count = {args.cid: 0}
 
 # Drift detection on client data
-def handle_client_drift(c_data, detector, net):
-    (x_train, y_train, x_val, y_val, cid) = c_data
+def handle_client_drift(x_val, cid, net):
 
-    detector_data = detector.predict(x_train, return_p_val=True, return_distance=True)
+    detector = client_detectors[int(cid)]
+
+    detector_data = detector.predict(x_val, return_p_val=True, return_distance=True)
     is_drift = detector_data["data"].get("is_drift", None)
+
     p_val = detector_data["data"].get("p_val", None)
     distance = detector_data["data"].get("distance", None)
 
-    print("Client:", cid)
-    print("p_val:", p_val)
-    print("distance:", distance)
+    # print("p_val:", p_val)
+    # print("distance:", distance)
+
+    isEliminated = False
 
     if is_drift:
-        print("Drift detected on client data. Retraining local model.")
-        net = train(net, x_train, y_train, num_epochs=5)
-
-        client_drift_count[args.cid] += 1
-        print('updated client_drift_count', client_drift_count)
+        client_drift_count[cid] += 1
+        print(f"Drift detected on client data {client_drift_count[cid]} times")
     else:
         print("No drift detected on client data. Continuing training.")
 
-    isEliminated = False
-    if client_drift_count[args.cid] > 3:
+    if client_drift_count[cid] >= 3:
         print(f"Client {cid} has detected drift more than 3 times!")
         isEliminated = True
 
-    return net, isEliminated
+    return isEliminated
 
 
 class FlowerClient(fl.client.NumPyClient):
-    def __init__(self, client_data, model, isEliminated):
+    def __init__(self, client_data, model, cid):
         self.client_data = client_data
         self.model = model
-        self.isEliminated = isEliminated
+        self.cid = cid
 
     def get_parameters(self, config):
         # Return the current model parameters
@@ -132,8 +131,7 @@ class FlowerClient(fl.client.NumPyClient):
         # Train the local model and return the new parameters, num_examples, and done flag
         new_params = [param.detach().cpu().numpy() for param in self.model.parameters()]
         num_examples = len(self.client_data["x_train"])
-        print('self.isEliminated', self.isEliminated)
-        return new_params, num_examples, {"isEliminated": self.isEliminated}
+        return new_params, num_examples, {}
 
     def evaluate(self, parameters, config):
         # Perform the evaluation of the model after updating it with the given
@@ -150,10 +148,14 @@ class FlowerClient(fl.client.NumPyClient):
             self.model, self.client_data["x_val"], self.client_data["y_val"]
         )
 
+        # Apply drift detection on client data
+        isEliminated = handle_client_drift(self.client_data["x_val"], self.cid, self.model)
+        print('isEliminated', isEliminated)
+
         return (
             float(loss),
             len(self.client_data["y_val"]),
-            {"accuracy": float(accuracy)},
+            {"accuracy": float(accuracy), "isEliminated": isEliminated},
         )
 
 
@@ -177,12 +179,6 @@ def client_fn(cid: str) -> FlowerClient:
 
     model = Encoder(encoding_dim).to(device)
 
-    # Apply drift detection on client data
-    model, isEliminated = handle_client_drift(all_data, client_detectors[int(cid)], model)
-
-    print('isEliminated', isEliminated)
-    # handle_client_drift(all_data, client_detectors[int(cid)], model)
-
     return FlowerClient(
         client_data={
             "x_train": x_train,
@@ -191,7 +187,7 @@ def client_fn(cid: str) -> FlowerClient:
             "y_val": y_val,
         },
         model=model,
-        isEliminated=isEliminated,
+        cid=cid,
     ).to_client()
 
 
