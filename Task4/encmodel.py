@@ -58,10 +58,6 @@ def train(model, x_train, y_train, num_epochs=5):
     )
     trainloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
 
-    criterion = torch.nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters())
-    model.train()
-
     for epoch in range(num_epochs):
         correct, total, epoch_loss = 0, 0, 0.0
         for images, labels in trainloader:

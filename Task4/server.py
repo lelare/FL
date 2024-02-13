@@ -1,6 +1,6 @@
 import flwr as fl
 from utils import *
-
+from flwr.common import Metrics
 
 # Copyright 2020 Flower Labs GmbH. All Rights Reserved.
 #
@@ -297,12 +297,22 @@ class MyFedAvg(fl.server.strategy.Strategy):
         return loss_aggregated, metrics_aggregated
 
 
+def weighted_average(metrics: List[Tuple[int, Metrics]]) -> Metrics:
+    # Multiply accuracy of each client by number of examples used
+    accuracies = [num_examples * m["accuracy"] for num_examples, m in metrics]
+    examples = [num_examples for num_examples, _ in metrics]
+
+    # Aggregate and return custom metric (weighted average)
+    return {"accuracy": sum(accuracies) / sum(examples)}
+
+
 strategy = MyFedAvg(
     fraction_fit=1.0,  # Sample 100% of available clients for training
     fraction_evaluate=0.5,  # Sample 50% of available clients for evaluation
     min_fit_clients=3,  # Never sample less than 3 clients for training
     min_evaluate_clients=3,  # Never sample less than 3 clients for evaluation
     min_available_clients=3,  # Wait until all 3 clients are available
+    # evaluate_metrics_aggregation_fn=weighted_average,  # <-- pass the metric aggregation function
 )
 
 

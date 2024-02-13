@@ -129,6 +129,7 @@ class FlowerClient(fl.client.NumPyClient):
         self.model.load_state_dict(state_dict)
 
         # Train the local model and return the new parameters, num_examples, and done flag
+        self.model = train(self.model, self.client_data["x_train"], self.client_data["y_train"], num_epochs=5)
         new_params = [param.detach().cpu().numpy() for param in self.model.parameters()]
         num_examples = len(self.client_data["x_train"])
         return new_params, num_examples, {}
